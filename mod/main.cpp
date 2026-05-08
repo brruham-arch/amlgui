@@ -160,7 +160,7 @@ EXPORT void OnModLoad() {
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
     // _Z18RwCameraShowRasterP8RwCameraPvj offset = 0x1d5d94 (Thumb +1)
-    void* target = (void*)(base + 0x1d5d94 + 1);
+    void* target = (void*)(base + 0x1da9bc + 1);
     logff("[GUI] target = %p", target);
 
     if (dobbyHook(target, (void*)hook_RwCameraShowRaster,
