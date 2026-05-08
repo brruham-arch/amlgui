@@ -31,6 +31,7 @@ static void logff(const char* fmt, ...) {
 static bool  g_imgui_ready   = false;
 static bool  g_checkbox_demo = false;
 static float g_slider_demo   = 1.0f;
+static int   g_frame_count   = 0;
 
 // ── eglSwapBuffers hook ───────────────────────────────────────────────────────
 typedef EGLBoolean (*eglSwapBuffers_t)(EGLDisplay, EGLSurface);
@@ -42,32 +43,44 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
-        io.DisplaySize = ImVec2(1280, 720);
 
-        // Nonaktifkan mouse agar touch game tidak masuk ImGui
+        // Ambil ukuran surface langsung
+        EGLint w = 0, h = 0;
+        eglQuerySurface(dpy, surface, EGL_WIDTH,  &w);
+        eglQuerySurface(dpy, surface, EGL_HEIGHT, &h);
+        if (w <= 0 || h <= 0) { w = 1280; h = 720; }
+        io.DisplaySize = ImVec2((float)w, (float)h);
+
+        logff("[GUI] DisplaySize = %dx%d", w, h);
+
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
 
         ImGui::StyleColorsDark();
-        ImGui_ImplAndroidGLES2_Init();
+
+        bool init_ok = ImGui_ImplAndroidGLES2_Init();
+        logff("[GUI] GLES2 init = %s", init_ok ? "OK" : "FAIL");
+
+        // Cek font texture
+        ImTextureID tex = io.Fonts->TexID;
+        logff("[GUI] font TexID = %u", (unsigned)(uintptr_t)tex);
 
         g_imgui_ready = true;
         logf("[GUI] ImGui ready");
     }
 
-    // Update display size dari EGL surface
+    g_frame_count++;
+
+    // Update display size
     EGLint w = 0, h = 0;
     eglQuerySurface(dpy, surface, EGL_WIDTH,  &w);
     eglQuerySurface(dpy, surface, EGL_HEIGHT, &h);
     ImGuiIO& io = ImGui::GetIO();
-    if (w > 0 && h > 0) {
-        io.DisplaySize = ImVec2((float)w, (float)h);
-    }
+    if (w > 0 && h > 0) io.DisplaySize = ImVec2((float)w, (float)h);
 
-    // Reset setiap frame — pastikan input game tidak masuk ImGui
     io.WantCaptureMouse    = false;
     io.WantCaptureKeyboard = false;
 
-    // ── Render frame ImGui ──────────────────────────────────────────────────
+    // ── Render ──────────────────────────────────────────────────────────────
     ImGui_ImplAndroidGLES2_NewFrame();
     ImGui::NewFrame();
 
@@ -82,17 +95,39 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         ImGuiWindowFlags_NoCollapse      |
         ImGuiWindowFlags_NoSavedSettings ;
 
-    // nullptr = tidak ada p_open, window tidak bisa di-close
     ImGui::Begin("##amlgui", nullptr, flags);
     ImGui::Text("brruham-arch | AML GUI v1.0");
     ImGui::Separator();
     ImGui::Checkbox("Demo Toggle", &g_checkbox_demo);
     ImGui::SliderFloat("Value", &g_slider_demo, 0.0f, 2.0f);
-    ImGui::Text("FPS: %.1f", io.Framerate);
+    ImGui::Text("frame: %d", g_frame_count);
     ImGui::End();
 
     ImGui::Render();
-    ImGui_ImplAndroidGLES2_RenderDrawData(ImGui::GetDrawData());
+
+    ImDrawData* dd = ImGui::GetDrawData();
+
+    // Log debug hanya di frame 1, 2, 3
+    if (g_frame_count <= 3) {
+        if (!dd) {
+            logff("[GUI] frame %d: GetDrawData NULL", g_frame_count);
+        } else {
+            logff("[GUI] frame %d: CmdListsCount=%d TotalVtx=%d TotalIdx=%d",
+                g_frame_count,
+                dd->CmdListsCount,
+                dd->TotalVtxCount,
+                dd->TotalIdxCount);
+            logff("[GUI] frame %d: DisplaySize=%.0fx%.0f Valid=%d",
+                g_frame_count,
+                dd->DisplaySize.x,
+                dd->DisplaySize.y,
+                dd->Valid);
+        }
+    }
+
+    if (dd && dd->Valid) {
+        ImGui_ImplAndroidGLES2_RenderDrawData(dd);
+    }
 
     return orig_eglSwapBuffers(dpy, surface);
 }
@@ -101,13 +136,13 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.0|ImGui overlay demo|brruham";
+    static const char* info = "amlgui|1.1|ImGui overlay debug|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.0");
+    logf("[GUI] OnModPreLoad v1.1");
 }
 
 EXPORT void OnModLoad() {
