@@ -112,7 +112,7 @@ static void do_render() {
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v1.5");
+    ImGui::Text("brruham-arch | AML GUI v1.6");
     ImGui::Separator();
     ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
@@ -124,27 +124,27 @@ static void do_render() {
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
 }
 
-// ── Hook RwCameraShowRaster ───────────────────────────────────────────────────
-typedef int (*RwCameraShowRaster_t)(void*, void*, unsigned int);
-static RwCameraShowRaster_t orig_RwCameraShowRaster = nullptr;
+// ── Hook NVEventEGLSwapBuffers ────────────────────────────────────────────────
+// _Z21NVEventEGLSwapBuffersv = 0x268f4c — wrapper eglSwapBuffers di libGTASA
+typedef void (*NVEventEGLSwapBuffers_t)(void);
+static NVEventEGLSwapBuffers_t orig_NVEventEGLSwapBuffers = nullptr;
 
-static int hook_RwCameraShowRaster(void* cam, void* a2, unsigned int flags) {
-    int ret = orig_RwCameraShowRaster(cam, a2, flags);
+static void hook_NVEventEGLSwapBuffers(void) {
+    orig_NVEventEGLSwapBuffers();
     do_render();
-    return ret;
 }
 
 // ── AML Entry Points ─────────────────────────────────────────────────────────
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.5|ImGui overlay|brruham";
+    static const char* info = "amlgui|1.6|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.5");
+    logf("[GUI] OnModPreLoad v1.6");
 }
 
 EXPORT void OnModLoad() {
@@ -159,17 +159,17 @@ EXPORT void OnModLoad() {
     if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
-    // _Z18RwCameraShowRasterP8RwCameraPvj offset = 0x1d5d94 (Thumb +1)
-    void* target = (void*)(base + 0x1da9bc + 1);
+    // _Z21NVEventEGLSwapBuffersv offset = 0x268f4c (Thumb +1)
+    void* target = (void*)(base + 0x268f4c + 1);
     logff("[GUI] target = %p", target);
 
-    if (dobbyHook(target, (void*)hook_RwCameraShowRaster,
-                  (void**)&orig_RwCameraShowRaster) != 0) {
+    if (dobbyHook(target, (void*)hook_NVEventEGLSwapBuffers,
+                  (void**)&orig_NVEventEGLSwapBuffers) != 0) {
         logf("[GUI] ERROR: DobbyHook gagal");
         return;
     }
 
-    logf("[GUI] hook RwCameraShowRaster OK");
+    logf("[GUI] hook NVEventEGLSwapBuffers OK");
     logf("[GUI] OnModLoad SELESAI");
 }
 
