@@ -1,0 +1,56 @@
+name: Build AML GUI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup NDK r25c
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+          add-to-path: true
+
+      - name: Download ImGui source
+        run: |
+          git clone --depth=1 --branch v1.90.4 https://github.com/ocornut/imgui.git /tmp/imgui
+          mkdir -p mod/imgui
+          cp /tmp/imgui/imgui.h          mod/imgui/imgui.h
+          cp /tmp/imgui/imgui_internal.h mod/imgui/imgui_internal.h
+          cp /tmp/imgui/imconfig.h       mod/imgui/imconfig.h
+          cp /tmp/imgui/imstb_rectpack.h mod/imgui/imstb_rectpack.h
+          cp /tmp/imgui/imstb_textedit.h mod/imgui/imstb_textedit.h
+          cp /tmp/imgui/imstb_truetype.h mod/imgui/imstb_truetype.h
+          cp /tmp/imgui/imgui.cpp        mod/imgui/imgui.cpp
+          cp /tmp/imgui/imgui_draw.cpp   mod/imgui/imgui_draw.cpp
+          cp /tmp/imgui/imgui_widgets.cpp mod/imgui/imgui_widgets.cpp
+          cp /tmp/imgui/imgui_tables.cpp mod/imgui/imgui_tables.cpp
+
+      - name: Build
+        run: |
+          $ANDROID_NDK_ROOT/ndk-build \
+            NDK_PROJECT_PATH=. \
+            APP_BUILD_SCRIPT=./jni/Android.mk \
+            NDK_APPLICATION_MK=./jni/Application.mk
+
+      - name: Verify
+        run: |
+          ls -lh libs/armeabi-v7a/
+          file libs/armeabi-v7a/libamlgui.so
+          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm \
+            -D libs/armeabi-v7a/libamlgui.so | grep " T "
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libamlgui-arm32
+          path: libs/armeabi-v7a/libamlgui.so
+          retention-days: 7
