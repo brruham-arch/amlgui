@@ -29,7 +29,7 @@ static void logff(const char* fmt, ...) {
     logf(buf);
 }
 
-// ── Dapatkan base address library dari /proc/self/maps ────────────────────────
+// ── Dapatkan base address dari /proc/self/maps ────────────────────────────────
 static uintptr_t get_lib_base(const char* libname) {
     FILE* f = fopen("/proc/self/maps", "r");
     if (!f) return 0;
@@ -119,7 +119,7 @@ static void do_render(EGLDisplay dpy, EGLSurface surface) {
         ImGuiWindowFlags_NoSavedSettings ;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v1.3");
+    ImGui::Text("brruham-arch | AML GUI v1.4");
     ImGui::Separator();
     ImGui::Checkbox("Demo Toggle", &g_checkbox_demo);
     ImGui::SliderFloat("Value", &g_slider_demo, 0.0f, 2.0f);
@@ -131,61 +131,6 @@ static void do_render(EGLDisplay dpy, EGLSurface surface) {
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
 }
 
-// ── GOT patch ─────────────────────────────────────────────────────────────────
-static bool got_patch(uintptr_t base, const char* sym_name, void* new_fn, void** old_fn) {
-    Elf32_Ehdr* ehdr = (Elf32_Ehdr*)base;
-    if (ehdr->e_ident[0] != 0x7f) { logf("[GUI] GOT: bukan ELF"); return false; }
-
-    Elf32_Phdr* phdr = (Elf32_Phdr*)(base + ehdr->e_phoff);
-    Elf32_Dyn*  dyn  = nullptr;
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_DYNAMIC) {
-            dyn = (Elf32_Dyn*)(base + phdr[i].p_vaddr);
-            break;
-        }
-    }
-    if (!dyn) { logf("[GUI] GOT: PT_DYNAMIC tidak ada"); return false; }
-
-    Elf32_Sym*  symtab  = nullptr;
-    char*       strtab  = nullptr;
-    Elf32_Rel*  plt_rel = nullptr;
-    Elf32_Word  plt_sz  = 0;
-
-    for (Elf32_Dyn* d = dyn; d->d_tag != DT_NULL; d++) {
-        switch (d->d_tag) {
-            case DT_SYMTAB:   symtab  = (Elf32_Sym*)(base + d->d_un.d_ptr); break;
-            case DT_STRTAB:   strtab  = (char*)     (base + d->d_un.d_ptr); break;
-            case DT_JMPREL:   plt_rel = (Elf32_Rel*)(base + d->d_un.d_ptr); break;
-            case DT_PLTRELSZ: plt_sz  = d->d_un.d_val;                      break;
-        }
-    }
-
-    if (!symtab || !strtab || !plt_rel) {
-        logf("[GUI] GOT: tabel tidak lengkap"); return false;
-    }
-
-    int count = (int)(plt_sz / sizeof(Elf32_Rel));
-    logff("[GUI] GOT: scan %d PLT entries di base=0x%08x", count, (unsigned)base);
-
-    for (int i = 0; i < count; i++) {
-        int sym_idx  = ELF32_R_SYM(plt_rel[i].r_info);
-        const char* name = strtab + symtab[sym_idx].st_name;
-        if (strcmp(name, sym_name) == 0) {
-            void** got_entry = (void**)(base + plt_rel[i].r_offset);
-            logff("[GUI] GOT: found %s offset=0x%x cur=%p", name, plt_rel[i].r_offset, *got_entry);
-            *old_fn = *got_entry;
-            uintptr_t page = (uintptr_t)got_entry & ~0xFFFu;
-            mprotect((void*)page, 0x1000, PROT_READ | PROT_WRITE);
-            *got_entry = new_fn;
-            mprotect((void*)page, 0x1000, PROT_READ);
-            logff("[GUI] GOT: patched -> %p", new_fn);
-            return true;
-        }
-    }
-    logff("[GUI] GOT: %s tidak ditemukan", sym_name);
-    return false;
-}
-
 // ── eglSwapBuffers hook ───────────────────────────────────────────────────────
 typedef EGLBoolean (*eglSwapBuffers_t)(EGLDisplay, EGLSurface);
 static eglSwapBuffers_t orig_eglSwapBuffers = nullptr;
@@ -195,29 +140,78 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     return orig_eglSwapBuffers(dpy, surface);
 }
 
+// ── Inline hook via overwrite fungsi asli (trampoline manual) ─────────────────
+// Patch 8 byte pertama fungsi target dengan:
+//   LDR PC, [PC, #0]  (Thumb2: F000 F8DF + alamat 32bit)
+// Ini lebih permanen dari Dobby karena tidak bisa di-undo oleh dlopen ulang
+
+static uint8_t g_orig_bytes[8] = {0};
+static void*   g_target_addr   = nullptr;
+
+static bool inline_hook(void* target, void* hook_fn) {
+    uintptr_t t = (uintptr_t)target;
+    // Thumb mode — strip bit 0, tapi patch di alamat genap
+    bool is_thumb = (t & 1);
+    t &= ~1u;
+
+    // Simpan original bytes
+    memcpy(g_orig_bytes, (void*)t, 8);
+
+    // Buat page writable
+    uintptr_t page = t & ~0xFFFu;
+    if (mprotect((void*)page, 0x2000, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+        logf("[GUI] inline_hook: mprotect gagal");
+        return false;
+    }
+
+    if (is_thumb) {
+        // Thumb2 absolute jump:
+        // LDR.W PC, [PC, #0]  = F8 DF F0 00
+        // .word <addr>
+        uint8_t patch[8] = {
+            0xDF, 0xF8, 0x00, 0xF0,  // LDR.W PC, [PC, #0]
+            0x00, 0x00, 0x00, 0x00   // placeholder alamat
+        };
+        uint32_t dst = (uint32_t)(uintptr_t)hook_fn;
+        memcpy(patch + 4, &dst, 4);
+        memcpy((void*)t, patch, 8);
+    } else {
+        // ARM absolute jump:
+        // LDR PC, [PC, #-4] = 04 F0 1F E5
+        // .word <addr>
+        uint8_t patch[8] = {
+            0x04, 0xF0, 0x1F, 0xE5,  // LDR PC, [PC, #-4]
+            0x00, 0x00, 0x00, 0x00
+        };
+        uint32_t dst = (uint32_t)(uintptr_t)hook_fn;
+        memcpy(patch + 4, &dst, 4);
+        memcpy((void*)t, patch, 8);
+    }
+
+    // Flush instruction cache
+    __builtin___clear_cache((char*)t, (char*)(t + 8));
+
+    mprotect((void*)page, 0x2000, PROT_READ | PROT_EXEC);
+    return true;
+}
+
 // ── AML Entry Points ─────────────────────────────────────────────────────────
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.3|ImGui overlay|brruham";
+    static const char* info = "amlgui|1.4|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.3");
+    logf("[GUI] OnModPreLoad v1.4");
 }
 
 EXPORT void OnModLoad() {
     logf("[GUI] OnModLoad start");
 
-    void* hDobby = dlopen("libdobby.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!hDobby) { logf("[GUI] ERROR: libdobby"); return; }
-
-    auto dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
-    if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
-
-    // ── Hook Dobby di libEGL ──────────────────────────────────────────────
+    // Dapatkan alamat eglSwapBuffers dari libEGL
     void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
     if (!hEGL) { logf("[GUI] ERROR: libEGL"); return; }
 
@@ -225,24 +219,59 @@ EXPORT void OnModLoad() {
     if (!addr) { logf("[GUI] ERROR: eglSwapBuffers sym"); return; }
     logff("[GUI] eglSwapBuffers addr = %p", addr);
 
-    if (dobbyHook(addr, (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers) != 0) {
-        logf("[GUI] ERROR: DobbyHook gagal"); return;
-    }
-    logf("[GUI] Dobby hook OK");
+    // Simpan original untuk dipanggil kembali
+    // Buat trampoline: alokasi executable memory berisi original bytes + jump ke +8
+    // Untuk simple: simpan pointer ke fungsi asli sebelum patch
+    uintptr_t real = (uintptr_t)addr & ~1u;
 
-    // ── GOT patch di libGTASA.so ─────────────────────────────────────────
-    uintptr_t gtasa_base = get_lib_base("libGTASA.so");
-    if (!gtasa_base) {
-        logf("[GUI] WARN: libGTASA base tidak ditemukan, skip GOT patch");
+    // Alokasi buffer untuk trampoline (original 8 byte + jump kembali)
+    void* trampoline = mmap(nullptr, 0x1000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+    if (trampoline == MAP_FAILED) {
+        logf("[GUI] ERROR: mmap trampoline gagal");
+        return;
+    }
+
+    bool is_thumb = ((uintptr_t)addr & 1);
+
+    // Salin 8 byte original ke trampoline
+    memcpy(trampoline, (void*)real, 8);
+
+    // Tambah jump dari trampoline ke (real + 8)
+    uintptr_t ret_addr = real + 8;
+    if (is_thumb) {
+        uint8_t jmp[8] = {
+            0xDF, 0xF8, 0x00, 0xF0,
+            0x00, 0x00, 0x00, 0x00
+        };
+        memcpy(jmp + 4, &ret_addr, 4);
+        memcpy((uint8_t*)trampoline + 8, jmp, 8);
     } else {
-        logff("[GUI] libGTASA base = 0x%08x", (unsigned)gtasa_base);
-        void* old = nullptr;
-        bool ok = got_patch(gtasa_base, "eglSwapBuffers",
-                            (void*)hook_eglSwapBuffers, &old);
-        // orig sudah di-set oleh Dobby, tidak perlu override dari GOT
-        logff("[GUI] GOT patch libGTASA = %s", ok ? "OK" : "FAIL");
+        uint8_t jmp[8] = {
+            0x04, 0xF0, 0x1F, 0xE5,
+            0x00, 0x00, 0x00, 0x00
+        };
+        memcpy(jmp + 4, &ret_addr, 4);
+        memcpy((uint8_t*)trampoline + 8, jmp, 8);
+    }
+    __builtin___clear_cache((char*)trampoline, (char*)trampoline + 16);
+
+    // orig_eglSwapBuffers = trampoline (dengan bit Thumb jika perlu)
+    uintptr_t tramp_addr = (uintptr_t)trampoline;
+    if (is_thumb) tramp_addr |= 1;
+    orig_eglSwapBuffers = (eglSwapBuffers_t)tramp_addr;
+
+    logff("[GUI] trampoline = %p (thumb=%d)", trampoline, is_thumb);
+
+    // Pasang inline hook
+    if (!inline_hook(addr, (void*)hook_eglSwapBuffers)) {
+        logf("[GUI] ERROR: inline_hook gagal");
+        return;
     }
 
+    logff("[GUI] inline hook OK, orig=%p", (void*)orig_eglSwapBuffers);
     logf("[GUI] OnModLoad SELESAI");
 }
 
