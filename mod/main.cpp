@@ -8,7 +8,6 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
-// ── ImGui ────────────────────────────────────────────────────────────────────
 #include "imgui/imgui.h"
 #include "imgui/imgui_impl_android_gles2.h"
 
@@ -29,7 +28,6 @@ static void logff(const char* fmt, ...) {
 }
 
 // ── State GUI ────────────────────────────────────────────────────────────────
-static bool  g_gui_visible   = true;   // toggle via sentuh area pojok kiri atas
 static bool  g_imgui_ready   = false;
 static bool  g_checkbox_demo = false;
 static float g_slider_demo   = 1.0f;
@@ -41,11 +39,14 @@ static eglSwapBuffers_t orig_eglSwapBuffers = nullptr;
 static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
     if (!g_imgui_ready) {
-        // Init ImGui sekali saat frame pertama
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGuiIO& io = ImGui::GetIO();
-        io.DisplaySize = ImVec2(1280, 720); // fallback — akan diupdate tiap frame
+        io.DisplaySize = ImVec2(1280, 720);
+
+        // Nonaktifkan semua input ImGui — biar tidak terpengaruh touch game
+        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+        io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
 
         ImGui::StyleColorsDark();
         ImGui_ImplAndroidGLES2_Init();
@@ -67,32 +68,32 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     ImGui_ImplAndroidGLES2_NewFrame();
     ImGui::NewFrame();
 
-    if (g_gui_visible) {
-        ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Once);
-        ImGui::SetNextWindowSize(ImVec2(260, 160), ImGuiCond_Once);
+    // Window selalu tampil, tidak bisa di-close oleh input
+    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(260, 140), ImGuiCond_Always);
 
-        ImGui::Begin("AML GUI", &g_gui_visible);
-        ImGui::Text("brruham-arch | AML Mod");
-        ImGui::Separator();
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar      |
+        ImGuiWindowFlags_NoResize        |
+        ImGuiWindowFlags_NoMove          |
+        ImGuiWindowFlags_NoScrollbar     |
+        ImGuiWindowFlags_NoCollapse      |
+        ImGuiWindowFlags_NoSavedSettings ;
 
-        ImGui::Checkbox("Demo Toggle", &g_checkbox_demo);
-        ImGui::SliderFloat("Value", &g_slider_demo, 0.0f, 2.0f);
-
-        if (ImGui::Button("Close")) {
-            g_gui_visible = false;
-        }
-        ImGui::End();
-    }
+    // nullptr = tidak ada p_open, window tidak bisa di-close
+    ImGui::Begin("##amlgui", nullptr, flags);
+    ImGui::Text("brruham-arch | AML GUI v1.0");
+    ImGui::Separator();
+    ImGui::Checkbox("Demo Toggle", &g_checkbox_demo);
+    ImGui::SliderFloat("Value", &g_slider_demo, 0.0f, 2.0f);
+    ImGui::Text("FPS: %.1f", io.Framerate);
+    ImGui::End();
 
     ImGui::Render();
     ImGui_ImplAndroidGLES2_RenderDrawData(ImGui::GetDrawData());
 
-    // Panggil aslinya
     return orig_eglSwapBuffers(dpy, surface);
 }
-
-// ── Touch passthrough — tap pojok kiri atas untuk toggle GUI ─────────────────
-// (opsional: bisa dikembangkan nanti via ANativeActivity touch hook)
 
 // ── AML Entry Points ─────────────────────────────────────────────────────────
 extern "C" {
@@ -110,14 +111,12 @@ EXPORT void OnModPreLoad() {
 EXPORT void OnModLoad() {
     logf("[GUI] OnModLoad start");
 
-    // Dobby untuk hook eglSwapBuffers
     void* hDobby = dlopen("libdobby.so", RTLD_NOW | RTLD_GLOBAL);
     if (!hDobby) { logf("[GUI] ERROR: libdobby tidak ditemukan"); return; }
 
     auto dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
     if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
 
-    // Ambil alamat eglSwapBuffers dari libEGL.so
     void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
     if (!hEGL) { logf("[GUI] ERROR: libEGL tidak ditemukan"); return; }
 
