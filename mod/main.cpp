@@ -124,13 +124,13 @@ static void do_render() {
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
 }
 
-// ── Hook NVEventEGLSwapBuffers ────────────────────────────────────────────────
-// _Z21NVEventEGLSwapBuffersv = 0x268f4c — wrapper eglSwapBuffers di libGTASA
-typedef void (*NVEventEGLSwapBuffers_t)(void);
-static NVEventEGLSwapBuffers_t orig_NVEventEGLSwapBuffers = nullptr;
+// ── Hook OS_ScreenSwapBuffers ────────────────────────────────────────────────
+// _Z21OS_ScreenSwapBuffersv = 0x268f4c — wrapper eglSwapBuffers di libGTASA
+typedef void (*OS_ScreenSwapBuffers_t)(void);
+static OS_ScreenSwapBuffers_t orig_OS_ScreenSwapBuffers = nullptr;
 
-static void hook_NVEventEGLSwapBuffers(void) {
-    orig_NVEventEGLSwapBuffers();
+static void hook_OS_ScreenSwapBuffers(void) {
+    orig_OS_ScreenSwapBuffers();
     do_render();
 }
 
@@ -159,17 +159,17 @@ EXPORT void OnModLoad() {
     if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
-    // _Z21NVEventEGLSwapBuffersv offset = 0x268f4c (Thumb +1)
-    void* target = (void*)(base + 0x268f4c + 1);
+    // _Z21OS_ScreenSwapBuffersv offset = 0x268f4c (Thumb +1)
+    void* target = (void*)(base + 0x268ee4 + 1);
     logff("[GUI] target = %p", target);
 
-    if (dobbyHook(target, (void*)hook_NVEventEGLSwapBuffers,
-                  (void**)&orig_NVEventEGLSwapBuffers) != 0) {
+    if (dobbyHook(target, (void*)hook_OS_ScreenSwapBuffers,
+                  (void**)&orig_OS_ScreenSwapBuffers) != 0) {
         logf("[GUI] ERROR: DobbyHook gagal");
         return;
     }
 
-    logf("[GUI] hook NVEventEGLSwapBuffers OK");
+    logf("[GUI] hook OS_ScreenSwapBuffers OK");
     logf("[GUI] OnModLoad SELESAI");
 }
 
