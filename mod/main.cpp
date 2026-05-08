@@ -32,7 +32,9 @@ static uintptr_t get_lib_base(const char* libname) {
     uintptr_t base = 0;
     while (fgets(line, sizeof(line), f)) {
         if (strstr(line, libname) && strstr(line, "r-xp")) {
-            base = (uintptr_t)strtoul(line, nullptr, 16);
+            unsigned long addr = 0;
+            sscanf(line, "%lx", &addr);
+            base = (uintptr_t)addr;
             break;
         }
     }
@@ -65,7 +67,7 @@ static void imgui_init() {
     ImGuiIO& io = ImGui::GetIO();
     EGLint w = 0, h = 0;
     if (dpy && srf) {
-        eglQuerySurface(dpy, srf, EGL_WIDTH, &w);
+        eglQuerySurface(dpy, srf, EGL_WIDTH,  &w);
         eglQuerySurface(dpy, srf, EGL_HEIGHT, &h);
     }
     if (w <= 0 || h <= 0) { w = 2262; h = 1080; }
@@ -86,10 +88,14 @@ static void do_render() {
         imgui_init();
     }
     g_frame++;
+
     EGLDisplay dpy = eglGetCurrentDisplay();
     EGLSurface srf = eglGetCurrentSurface(EGL_DRAW);
     EGLint w = 0, h = 0;
-    if (dpy && srf) eglQuerySurface(dpy, srf, EGL_WIDTH, &w), eglQuerySurface(dpy, srf, EGL_HEIGHT, &h);
+    if (dpy && srf) {
+        eglQuerySurface(dpy, srf, EGL_WIDTH,  &w);
+        eglQuerySurface(dpy, srf, EGL_HEIGHT, &h);
+    }
     ImGuiIO& io = ImGui::GetIO();
     if (w > 0 && h > 0) io.DisplaySize = ImVec2((float)w, (float)h);
     io.WantCaptureMouse    = false;
@@ -101,14 +107,14 @@ static void do_render() {
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(280, 130), ImGuiCond_Always);
     ImGuiWindowFlags wf =
-        ImGuiWindowFlags_NoTitleBar  | ImGuiWindowFlags_NoResize  |
+        ImGuiWindowFlags_NoTitleBar  | ImGuiWindowFlags_NoResize    |
         ImGuiWindowFlags_NoMove      | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
     ImGui::Text("brruham-arch | AML GUI v1.5");
     ImGui::Separator();
-    ImGui::Checkbox("Demo Toggle", &g_checkbox);
+    ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
     ImGui::Text("frame=%d reinit=%d", g_frame, g_reinit);
     ImGui::End();
@@ -119,9 +125,6 @@ static void do_render() {
 }
 
 // ── Hook RwCameraShowRaster ───────────────────────────────────────────────────
-// Offset 0x1da9e0 dari crashlog (Thumb: pc=0x1da9e1 → offset=0x1da9e0)
-// Dipanggil tiap frame — lebih stabil dari eglSwapBuffers
-
 typedef int (*RwCameraShowRaster_t)(void*, void*, unsigned int);
 static RwCameraShowRaster_t orig_RwCameraShowRaster = nullptr;
 
@@ -156,10 +159,8 @@ EXPORT void OnModLoad() {
     if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
-    // Offset RwCameraShowRaster dari crashlog: pc=0x1da9e1 (Thumb)
-    // Dobby butuh alamat genap (strip bit0), dia sendiri yang set Thumb
-    uintptr_t offset = 0x1da9e0;
-    void* target = (void*)(base + offset);
+    // _Z18RwCameraShowRasterP8RwCameraPvj offset = 0x1d5d94 (Thumb +1)
+    void* target = (void*)(base + 0x1d5d94 + 1);
     logff("[GUI] target = %p", target);
 
     if (dobbyHook(target, (void*)hook_RwCameraShowRaster,
