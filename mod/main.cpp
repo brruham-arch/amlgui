@@ -44,9 +44,8 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2(1280, 720);
 
-        // Nonaktifkan semua input ImGui — biar tidak terpengaruh touch game
+        // Nonaktifkan mouse agar touch game tidak masuk ImGui
         io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-        io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
 
         ImGui::StyleColorsDark();
         ImGui_ImplAndroidGLES2_Init();
@@ -64,11 +63,14 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         io.DisplaySize = ImVec2((float)w, (float)h);
     }
 
+    // Reset setiap frame — pastikan input game tidak masuk ImGui
+    io.WantCaptureMouse    = false;
+    io.WantCaptureKeyboard = false;
+
     // ── Render frame ImGui ──────────────────────────────────────────────────
     ImGui_ImplAndroidGLES2_NewFrame();
     ImGui::NewFrame();
 
-    // Window selalu tampil, tidak bisa di-close oleh input
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(260, 140), ImGuiCond_Always);
 
