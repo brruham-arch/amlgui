@@ -4,7 +4,6 @@
 #include <android/log.h>
 #include <stdio.h>
 #include <stdarg.h>
-#include <pthread.h>
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
@@ -28,10 +27,45 @@ static void logff(const char* fmt, ...) {
 }
 
 // ── State GUI ────────────────────────────────────────────────────────────────
-static bool  g_imgui_ready   = false;
-static bool  g_checkbox_demo = false;
-static float g_slider_demo   = 1.0f;
-static int   g_frame_count   = 0;
+static bool       g_imgui_ready   = false;
+static EGLContext g_last_context  = EGL_NO_CONTEXT;
+static bool       g_checkbox_demo = false;
+static float      g_slider_demo   = 1.0f;
+static int        g_frame_count   = 0;
+static int        g_reinit_count  = 0;
+
+// ── ImGui init/shutdown ───────────────────────────────────────────────────────
+static void imgui_shutdown() {
+    if (!g_imgui_ready) return;
+    ImGui_ImplAndroidGLES2_Shutdown();
+    ImGui::DestroyContext();
+    g_imgui_ready  = false;
+    g_last_context = EGL_NO_CONTEXT;
+    logf("[GUI] ImGui shutdown");
+}
+
+static void imgui_init(EGLDisplay dpy, EGLSurface surface) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+
+    EGLint w = 0, h = 0;
+    eglQuerySurface(dpy, surface, EGL_WIDTH,  &w);
+    eglQuerySurface(dpy, surface, EGL_HEIGHT, &h);
+    if (w <= 0 || h <= 0) { w = 2262; h = 1080; }
+    io.DisplaySize = ImVec2((float)w, (float)h);
+
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
+
+    ImGui::StyleColorsDark();
+    ImGui_ImplAndroidGLES2_Init();
+
+    g_imgui_ready  = true;
+    g_last_context = eglGetCurrentContext();
+
+    logff("[GUI] ImGui init #%d ctx=%p size=%dx%d",
+        ++g_reinit_count, (void*)g_last_context, w, h);
+}
 
 // ── eglSwapBuffers hook ───────────────────────────────────────────────────────
 typedef EGLBoolean (*eglSwapBuffers_t)(EGLDisplay, EGLSurface);
@@ -39,33 +73,16 @@ static eglSwapBuffers_t orig_eglSwapBuffers = nullptr;
 
 static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 
-    if (!g_imgui_ready) {
-        IMGUI_CHECKVERSION();
-        ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
+    EGLContext cur = eglGetCurrentContext();
 
-        // Ambil ukuran surface langsung
-        EGLint w = 0, h = 0;
-        eglQuerySurface(dpy, surface, EGL_WIDTH,  &w);
-        eglQuerySurface(dpy, surface, EGL_HEIGHT, &h);
-        if (w <= 0 || h <= 0) { w = 1280; h = 720; }
-        io.DisplaySize = ImVec2((float)w, (float)h);
-
-        logff("[GUI] DisplaySize = %dx%d", w, h);
-
-        io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-
-        ImGui::StyleColorsDark();
-
-        bool init_ok = ImGui_ImplAndroidGLES2_Init();
-        logff("[GUI] GLES2 init = %s", init_ok ? "OK" : "FAIL");
-
-        // Cek font texture
-        ImTextureID tex = io.Fonts->TexID;
-        logff("[GUI] font TexID = %u", (unsigned)(uintptr_t)tex);
-
-        g_imgui_ready = true;
-        logf("[GUI] ImGui ready");
+    // Context berubah atau belum init — reinit ImGui
+    if (!g_imgui_ready || cur != g_last_context) {
+        if (cur == EGL_NO_CONTEXT) {
+            // Context tidak valid, skip frame ini
+            return orig_eglSwapBuffers(dpy, surface);
+        }
+        imgui_shutdown();
+        imgui_init(dpy, surface);
     }
 
     g_frame_count++;
@@ -85,9 +102,9 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     ImGui::NewFrame();
 
     ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(260, 140), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(280, 130), ImGuiCond_Always);
 
-    ImGuiWindowFlags flags =
+    ImGuiWindowFlags wf =
         ImGuiWindowFlags_NoTitleBar      |
         ImGuiWindowFlags_NoResize        |
         ImGuiWindowFlags_NoMove          |
@@ -95,36 +112,17 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
         ImGuiWindowFlags_NoCollapse      |
         ImGuiWindowFlags_NoSavedSettings ;
 
-    ImGui::Begin("##amlgui", nullptr, flags);
-    ImGui::Text("brruham-arch | AML GUI v1.0");
+    ImGui::Begin("##amlgui", nullptr, wf);
+    ImGui::Text("brruham-arch | AML GUI v1.2");
     ImGui::Separator();
     ImGui::Checkbox("Demo Toggle", &g_checkbox_demo);
     ImGui::SliderFloat("Value", &g_slider_demo, 0.0f, 2.0f);
-    ImGui::Text("frame: %d", g_frame_count);
+    ImGui::Text("frame=%d reinit=%d", g_frame_count, g_reinit_count);
     ImGui::End();
 
     ImGui::Render();
 
     ImDrawData* dd = ImGui::GetDrawData();
-
-    // Log debug hanya di frame 1, 2, 3
-    if (g_frame_count <= 3) {
-        if (!dd) {
-            logff("[GUI] frame %d: GetDrawData NULL", g_frame_count);
-        } else {
-            logff("[GUI] frame %d: CmdListsCount=%d TotalVtx=%d TotalIdx=%d",
-                g_frame_count,
-                dd->CmdListsCount,
-                dd->TotalVtxCount,
-                dd->TotalIdxCount);
-            logff("[GUI] frame %d: DisplaySize=%.0fx%.0f Valid=%d",
-                g_frame_count,
-                dd->DisplaySize.x,
-                dd->DisplaySize.y,
-                dd->Valid);
-        }
-    }
-
     if (dd && dd->Valid) {
         ImGui_ImplAndroidGLES2_RenderDrawData(dd);
     }
@@ -136,26 +134,26 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.1|ImGui overlay debug|brruham";
+    static const char* info = "amlgui|1.2|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.1");
+    logf("[GUI] OnModPreLoad v1.2");
 }
 
 EXPORT void OnModLoad() {
     logf("[GUI] OnModLoad start");
 
     void* hDobby = dlopen("libdobby.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!hDobby) { logf("[GUI] ERROR: libdobby tidak ditemukan"); return; }
+    if (!hDobby) { logf("[GUI] ERROR: libdobby"); return; }
 
     auto dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
     if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
 
     void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!hEGL) { logf("[GUI] ERROR: libEGL tidak ditemukan"); return; }
+    if (!hEGL) { logf("[GUI] ERROR: libEGL"); return; }
 
     void* addr = dlsym(hEGL, "eglSwapBuffers");
     if (!addr) { logf("[GUI] ERROR: eglSwapBuffers sym"); return; }
@@ -163,11 +161,11 @@ EXPORT void OnModLoad() {
     logff("[GUI] eglSwapBuffers addr = %p", addr);
 
     if (dobbyHook(addr, (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers) != 0) {
-        logf("[GUI] ERROR: DobbyHook eglSwapBuffers gagal");
+        logf("[GUI] ERROR: DobbyHook gagal");
         return;
     }
 
-    logf("[GUI] OnModLoad SELESAI — hook terpasang");
+    logf("[GUI] OnModLoad SELESAI");
 }
 
 } // extern "C"
