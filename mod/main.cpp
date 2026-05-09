@@ -122,11 +122,11 @@ static void do_render() {
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
 }
 
-typedef void (*Render2dStuff_t)(void);
-static Render2dStuff_t orig_Render2dStuff = nullptr;
+typedef void (*DoGameState_t)(void);
+static DoGameState_t orig_DoGameState = nullptr;
 
-static void hook_Render2dStuff(void) {
-    orig_Render2dStuff();
+static void hook_DoGameState(void) {
+    orig_DoGameState();
     do_render();
 }
 
@@ -154,17 +154,17 @@ EXPORT void OnModLoad() {
     void* hGTASA = dlopen("libGTASA.so", RTLD_NOW | RTLD_NOLOAD);
     if (!hGTASA) { logf("[GUI] ERROR: libGTASA handle"); return; }
 
-    void* target = dlsym(hGTASA, "_Z13Render2dStuffv");
-    if (!target) { logf("[GUI] ERROR: Render2dStuff sym"); return; }
-    logff("[GUI] Render2dStuff = %p", target);
+    void* target = dlsym(hGTASA, "_Z11DoGameStatev");
+    if (!target) { logf("[GUI] ERROR: DoGameState sym"); return; }
+    logff("[GUI] DoGameState = %p", target);
 
-    if (dobbyHook(target, (void*)hook_Render2dStuff,
-                  (void**)&orig_Render2dStuff) != 0) {
+    if (dobbyHook(target, (void*)hook_DoGameState,
+                  (void**)&orig_DoGameState) != 0) {
         logf("[GUI] ERROR: DobbyHook gagal");
         return;
     }
 
-    logf("[GUI] hook Render2dStuff OK");
+    logf("[GUI] hook DoGameState OK");
     logf("[GUI] OnModLoad SELESAI");
 }
 
