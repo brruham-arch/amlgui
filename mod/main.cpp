@@ -48,6 +48,7 @@ static bool       g_checkbox     = false;
 static float      g_slider       = 1.0f;
 static int        g_frame        = 0;
 static int        g_reinit       = 0;
+static int        g_hook_calls   = 0;
 
 static void imgui_shutdown() {
     if (!g_imgui_ready) return;
@@ -80,7 +81,16 @@ static void imgui_init() {
 }
 
 static void do_render() {
+    g_hook_calls++;
+
     EGLContext cur = eglGetCurrentContext();
+
+    // Log tiap 300 call
+    if (g_hook_calls % 300 == 1) {
+        logff("[GUI] hook_calls=%d ctx=%p no_ctx=%p ready=%d",
+            g_hook_calls, (void*)cur, (void*)EGL_NO_CONTEXT, g_imgui_ready);
+    }
+
     if (cur == EGL_NO_CONTEXT) return;
     if (!g_imgui_ready || cur != g_last_context) {
         imgui_shutdown();
@@ -111,7 +121,7 @@ static void do_render() {
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v1.6");
+    ImGui::Text("brruham-arch | AML GUI v1.7");
     ImGui::Separator();
     ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
@@ -127,20 +137,20 @@ typedef void (*OS_ScreenSwapBuffers_t)(void);
 static OS_ScreenSwapBuffers_t orig_OS_ScreenSwapBuffers = nullptr;
 
 static void hook_OS_ScreenSwapBuffers(void) {
-    do_render();                   // render dulu sebelum swap
+    do_render();
     orig_OS_ScreenSwapBuffers();
 }
 
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.6|ImGui overlay|brruham";
+    static const char* info = "amlgui|1.7|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.6");
+    logf("[GUI] OnModPreLoad v1.7");
 }
 
 EXPORT void OnModLoad() {
