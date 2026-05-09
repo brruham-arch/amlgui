@@ -131,13 +131,13 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     return orig_eglSwapBuffers(dpy, surface);
 }
 
-// Hook OS_ScreenSwapBuffers — untuk re-hook eglSwapBuffers tiap frame
-typedef void (*OS_ScreenSwapBuffers_t)(void);
-static OS_ScreenSwapBuffers_t orig_OS_ScreenSwapBuffers = nullptr;
+// Hook Pump_SwapBuffers — untuk re-hook eglSwapBuffers tiap frame
+typedef void (*Pump_SwapBuffers_t)(void);
+static Pump_SwapBuffers_t orig_Pump_SwapBuffers = nullptr;
 
 static int (*g_dobbyHook)(void*, void*, void**) = nullptr;
 
-static void hook_OS_ScreenSwapBuffers(void) {
+static void hook_Pump_SwapBuffers(void) {
     // Re-hook eglSwapBuffers setiap kali dipanggil — pastikan hook tidak hilang
     if (!orig_eglSwapBuffers) {
         void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
@@ -148,7 +148,7 @@ static void hook_OS_ScreenSwapBuffers(void) {
             }
         }
     }
-    orig_OS_ScreenSwapBuffers();
+    orig_Pump_SwapBuffers();
 }
 
 extern "C" {
@@ -175,11 +175,11 @@ EXPORT void OnModLoad() {
     if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
-    // Hook OS_ScreenSwapBuffers untuk trigger re-hook eglSwapBuffers
-    void* target = (void*)(base + 0x268ee4 + 1);
-    if (g_dobbyHook(target, (void*)hook_OS_ScreenSwapBuffers,
-                    (void**)&orig_OS_ScreenSwapBuffers) != 0) {
-        logf("[GUI] ERROR: DobbyHook OS_ScreenSwapBuffers gagal");
+    // Hook Pump_SwapBuffers untuk trigger re-hook eglSwapBuffers
+    void* target = (void*)(base + 0x3f6d34 + 1);
+    if (g_dobbyHook(target, (void*)hook_Pump_SwapBuffers,
+                    (void**)&orig_Pump_SwapBuffers) != 0) {
+        logf("[GUI] ERROR: DobbyHook Pump_SwapBuffers gagal");
         return;
     }
     logf("[GUI] hook OK");
