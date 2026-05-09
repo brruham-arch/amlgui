@@ -110,7 +110,7 @@ static void do_render() {
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v2.0");
+    ImGui::Text("brruham-arch | AML GUI v2.1");
     ImGui::Separator();
     ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
@@ -122,8 +122,6 @@ static void do_render() {
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
 }
 
-// Hook Render2dStuff — titik yang sama dengan AML_ImGui
-// _Z13Render2dStuffv offset 0x3f641c
 typedef void (*Render2dStuff_t)(void);
 static Render2dStuff_t orig_Render2dStuff = nullptr;
 
@@ -135,13 +133,13 @@ static void hook_Render2dStuff(void) {
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|2.0|ImGui overlay|brruham";
+    static const char* info = "amlgui|2.1|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v2.0");
+    logf("[GUI] OnModPreLoad v2.1");
 }
 
 EXPORT void OnModLoad() {
@@ -152,13 +150,13 @@ EXPORT void OnModLoad() {
     auto dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
     if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
 
-    uintptr_t base = get_lib_base("libGTASA.so");
-    if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
-    logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
+    // Pakai dlsym seperti AML_ImGui
+    void* hGTASA = dlopen("libGTASA.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!hGTASA) { logf("[GUI] ERROR: libGTASA handle"); return; }
 
-    // _Z13Render2dStuffv offset 0x3f641c (Thumb +1)
-    void* target = (void*)(base + 0x3f641c + 1);
-    logff("[GUI] target Render2dStuff = %p", target);
+    void* target = dlsym(hGTASA, "_Z13Render2dStuffv");
+    if (!target) { logf("[GUI] ERROR: Render2dStuff sym"); return; }
+    logff("[GUI] Render2dStuff = %p", target);
 
     if (dobbyHook(target, (void*)hook_Render2dStuff,
                   (void**)&orig_Render2dStuff) != 0) {
