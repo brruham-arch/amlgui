@@ -48,7 +48,6 @@ static bool       g_checkbox     = false;
 static float      g_slider       = 1.0f;
 static int        g_frame        = 0;
 static int        g_reinit       = 0;
-static int        g_hook_calls   = 0;
 
 static void imgui_shutdown() {
     if (!g_imgui_ready) return;
@@ -56,7 +55,6 @@ static void imgui_shutdown() {
     ImGui::DestroyContext();
     g_imgui_ready  = false;
     g_last_context = EGL_NO_CONTEXT;
-    logf("[GUI] shutdown");
 }
 
 static void imgui_init() {
@@ -81,16 +79,7 @@ static void imgui_init() {
 }
 
 static void do_render() {
-    g_hook_calls++;
-
     EGLContext cur = eglGetCurrentContext();
-
-    // Log tiap 300 call
-    if (g_hook_calls % 300 == 1) {
-        logff("[GUI] hook_calls=%d ctx=%p no_ctx=%p ready=%d",
-            g_hook_calls, (void*)cur, (void*)EGL_NO_CONTEXT, g_imgui_ready);
-    }
-
     if (cur == EGL_NO_CONTEXT) return;
     if (!g_imgui_ready || cur != g_last_context) {
         imgui_shutdown();
@@ -121,7 +110,7 @@ static void do_render() {
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v1.7");
+    ImGui::Text("brruham-arch | AML GUI v1.8");
     ImGui::Separator();
     ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
@@ -133,24 +122,45 @@ static void do_render() {
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
 }
 
+// Hook eglSwapBuffers — render tepat sebelum buffer di-swap ke layar
+typedef EGLBoolean (*eglSwapBuffers_t)(EGLDisplay, EGLSurface);
+static eglSwapBuffers_t orig_eglSwapBuffers = nullptr;
+
+static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
+    do_render();
+    return orig_eglSwapBuffers(dpy, surface);
+}
+
+// Hook OS_ScreenSwapBuffers — untuk re-hook eglSwapBuffers tiap frame
 typedef void (*OS_ScreenSwapBuffers_t)(void);
 static OS_ScreenSwapBuffers_t orig_OS_ScreenSwapBuffers = nullptr;
 
+static int (*g_dobbyHook)(void*, void*, void**) = nullptr;
+
 static void hook_OS_ScreenSwapBuffers(void) {
-    do_render();
+    // Re-hook eglSwapBuffers setiap kali dipanggil — pastikan hook tidak hilang
+    if (!orig_eglSwapBuffers) {
+        void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
+        if (hEGL) {
+            void* addr = dlsym(hEGL, "eglSwapBuffers");
+            if (addr && g_dobbyHook) {
+                g_dobbyHook(addr, (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers);
+            }
+        }
+    }
     orig_OS_ScreenSwapBuffers();
 }
 
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.7|ImGui overlay|brruham";
+    static const char* info = "amlgui|1.8|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.7");
+    logf("[GUI] OnModPreLoad v1.8");
 }
 
 EXPORT void OnModLoad() {
@@ -158,23 +168,21 @@ EXPORT void OnModLoad() {
 
     void* hDobby = dlopen("libdobby.so", RTLD_NOW | RTLD_GLOBAL);
     if (!hDobby) { logf("[GUI] ERROR: libdobby"); return; }
-    auto dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
-    if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
+    g_dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
+    if (!g_dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
 
     uintptr_t base = get_lib_base("libGTASA.so");
     if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
+    // Hook OS_ScreenSwapBuffers untuk trigger re-hook eglSwapBuffers
     void* target = (void*)(base + 0x268ee4 + 1);
-    logff("[GUI] target = %p", target);
-
-    if (dobbyHook(target, (void*)hook_OS_ScreenSwapBuffers,
-                  (void**)&orig_OS_ScreenSwapBuffers) != 0) {
-        logf("[GUI] ERROR: DobbyHook gagal");
+    if (g_dobbyHook(target, (void*)hook_OS_ScreenSwapBuffers,
+                    (void**)&orig_OS_ScreenSwapBuffers) != 0) {
+        logf("[GUI] ERROR: DobbyHook OS_ScreenSwapBuffers gagal");
         return;
     }
-
-    logf("[GUI] hook OS_ScreenSwapBuffers OK");
+    logf("[GUI] hook OK");
     logf("[GUI] OnModLoad SELESAI");
 }
 
