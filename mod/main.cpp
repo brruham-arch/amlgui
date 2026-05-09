@@ -110,7 +110,7 @@ static void do_render() {
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v1.8");
+    ImGui::Text("brruham-arch | AML GUI v1.9");
     ImGui::Separator();
     ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
@@ -120,9 +120,19 @@ static void do_render() {
     ImGui::Render();
     ImDrawData* dd = ImGui::GetDrawData();
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
+
+    if (g_frame % 300 == 1)
+        logff("[GUI] render frame=%d", g_frame);
 }
 
-// Hook eglSwapBuffers — render tepat sebelum buffer di-swap ke layar
+// NVEventEGLSwapBuffers memanggil eglSwapBuffers di dalamnya
+// Kita render SETELAH orig — tapi SEBELUM eglSwapBuffers asli dipanggil
+// caranya: hook NVEventEGLSwapBuffers, panggil orig dulu,
+// lalu render di sini tidak bisa karena swap sudah terjadi di dalam orig.
+//
+// Solusi: hook eglSwapBuffers dari dalam NVEventEGLSwapBuffers
+// dan render di hook_eglSwapBuffers tepat sebelum swap.
+
 typedef EGLBoolean (*eglSwapBuffers_t)(EGLDisplay, EGLSurface);
 static eglSwapBuffers_t orig_eglSwapBuffers = nullptr;
 
@@ -131,36 +141,36 @@ static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     return orig_eglSwapBuffers(dpy, surface);
 }
 
-// Hook Pump_SwapBuffers — untuk re-hook eglSwapBuffers tiap frame
-typedef void (*Pump_SwapBuffers_t)(void);
-static Pump_SwapBuffers_t orig_Pump_SwapBuffers = nullptr;
-
+typedef void (*NVEventEGLSwapBuffers_t)(void);
+static NVEventEGLSwapBuffers_t orig_NVEventEGLSwapBuffers = nullptr;
 static int (*g_dobbyHook)(void*, void*, void**) = nullptr;
 
-static void hook_Pump_SwapBuffers(void) {
-    // Re-hook eglSwapBuffers setiap kali dipanggil — pastikan hook tidak hilang
-    if (!orig_eglSwapBuffers) {
-        void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
-        if (hEGL) {
-            void* addr = dlsym(hEGL, "eglSwapBuffers");
-            if (addr && g_dobbyHook) {
-                g_dobbyHook(addr, (void*)hook_eglSwapBuffers, (void**)&orig_eglSwapBuffers);
-            }
+static void hook_NVEventEGLSwapBuffers(void) {
+    // Pasang hook eglSwapBuffers setiap frame — jaga agar tidak hilang
+    void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
+    if (hEGL && g_dobbyHook) {
+        void* addr = dlsym(hEGL, "eglSwapBuffers");
+        if (addr) {
+            void* cur_orig = nullptr;
+            // Selalu re-hook
+            g_dobbyHook(addr, (void*)hook_eglSwapBuffers, (void**)&cur_orig);
+            if (!orig_eglSwapBuffers && cur_orig)
+                orig_eglSwapBuffers = (eglSwapBuffers_t)cur_orig;
         }
     }
-    orig_Pump_SwapBuffers();
+    orig_NVEventEGLSwapBuffers();
 }
 
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.8|ImGui overlay|brruham";
+    static const char* info = "amlgui|1.9|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.8");
+    logf("[GUI] OnModPreLoad v1.9");
 }
 
 EXPORT void OnModLoad() {
@@ -175,11 +185,12 @@ EXPORT void OnModLoad() {
     if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
-    // Hook Pump_SwapBuffers untuk trigger re-hook eglSwapBuffers
-    void* target = (void*)(base + 0x3f6d34 + 1);
-    if (g_dobbyHook(target, (void*)hook_Pump_SwapBuffers,
-                    (void**)&orig_Pump_SwapBuffers) != 0) {
-        logf("[GUI] ERROR: DobbyHook Pump_SwapBuffers gagal");
+    void* target = (void*)(base + 0x268f4c + 1);
+    logff("[GUI] target NVEventEGLSwapBuffers = %p", target);
+
+    if (g_dobbyHook(target, (void*)hook_NVEventEGLSwapBuffers,
+                    (void**)&orig_NVEventEGLSwapBuffers) != 0) {
+        logf("[GUI] ERROR: DobbyHook gagal");
         return;
     }
     logf("[GUI] hook OK");
