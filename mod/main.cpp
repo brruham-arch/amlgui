@@ -110,7 +110,7 @@ static void do_render() {
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v2.2");
+    ImGui::Text("brruham-arch | AML GUI v2.3");
     ImGui::Separator();
     ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
@@ -122,66 +122,45 @@ static void do_render() {
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
 }
 
-typedef void (*DoGameState_t)(void);
-static DoGameState_t orig_DoGameState = nullptr;
+typedef void (*RQ_SwapBuffers_t)(char**);
+static RQ_SwapBuffers_t orig_RQ_SwapBuffers = nullptr;
 
-static void hook_DoGameState(void) {
-    orig_DoGameState();
+static void hook_RQ_SwapBuffers(char** a) {
+    orig_RQ_SwapBuffers(a);
     do_render();
 }
 
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|2.2|ImGui overlay|brruham";
+    static const char* info = "amlgui|2.3|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v2.2");
+    logf("[GUI] OnModPreLoad v2.3");
 }
 
 EXPORT void OnModLoad() {
     logf("[GUI] OnModLoad start");
 
-    // Coba semua cara dapatkan DobbyHook
     typedef int (*DobbyHook_t)(void*, void*, void**);
     DobbyHook_t dobbyHook = nullptr;
+    void* hDobby = dlopen("libdobby.so", RTLD_NOW | RTLD_GLOBAL);
+    if (hDobby) dobbyHook = (DobbyHook_t)dlsym(hDobby, "DobbyHook");
+    if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook"); return; }
 
-    // Cara 1: RTLD_DEFAULT (sudah di memory)
-    dobbyHook = (DobbyHook_t)dlsym(RTLD_DEFAULT, "DobbyHook");
-    logff("[GUI] DobbyHook RTLD_DEFAULT = %p", (void*)dobbyHook);
-
-    // Cara 2: dlopen eksplisit
-    if (!dobbyHook) {
-        void* hDobby = dlopen("libdobby.so", RTLD_NOW | RTLD_GLOBAL);
-        if (hDobby) dobbyHook = (DobbyHook_t)dlsym(hDobby, "DobbyHook");
-        logff("[GUI] DobbyHook dlopen = %p", (void*)dobbyHook);
-    }
-
-    if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook tidak ditemukan"); return; }
-
-    // Target: DoGameState via dlsym
     void* hGTASA = dlopen("libGTASA.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!hGTASA) { logf("[GUI] ERROR: libGTASA handle"); return; }
+    if (!hGTASA) { logf("[GUI] ERROR: libGTASA"); return; }
 
-    void* target = dlsym(hGTASA, "_Z11DoGameStatev");
-    if (!target) { logf("[GUI] ERROR: DoGameState sym"); return; }
-    logff("[GUI] DoGameState = %p", target);
+    void* target = dlsym(hGTASA, "_Z24RQ_Command_rqSwapBuffersRPc");
+    if (!target) { logf("[GUI] ERROR: sym"); return; }
+    logff("[GUI] RQ_SwapBuffers = %p", target);
 
-    // Log 8 byte sebelum hook
-    uint8_t* p = (uint8_t*)((uintptr_t)target & ~1u);
-    logff("[GUI] bytes before: %02x %02x %02x %02x %02x %02x %02x %02x",
-        p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]);
-
-    int ret = dobbyHook(target, (void*)hook_DoGameState,
-                        (void**)&orig_DoGameState);
-    logff("[GUI] DobbyHook ret = %d orig = %p", ret, (void*)orig_DoGameState);
-
-    // Log 8 byte setelah hook
-    logff("[GUI] bytes after:  %02x %02x %02x %02x %02x %02x %02x %02x",
-        p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]);
+    int ret = dobbyHook(target, (void*)hook_RQ_SwapBuffers,
+                        (void**)&orig_RQ_SwapBuffers);
+    logff("[GUI] DobbyHook ret=%d orig=%p", ret, (void*)orig_RQ_SwapBuffers);
 
     logf("[GUI] OnModLoad SELESAI");
 }
