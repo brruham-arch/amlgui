@@ -110,7 +110,7 @@ static void do_render() {
         ImGuiWindowFlags_NoCollapse  | ImGuiWindowFlags_NoSavedSettings;
 
     ImGui::Begin("##amlgui", nullptr, wf);
-    ImGui::Text("brruham-arch | AML GUI v1.9");
+    ImGui::Text("brruham-arch | AML GUI v2.0");
     ImGui::Separator();
     ImGui::Checkbox("Demo", &g_checkbox);
     ImGui::SliderFloat("Value", &g_slider, 0.0f, 2.0f);
@@ -120,57 +120,28 @@ static void do_render() {
     ImGui::Render();
     ImDrawData* dd = ImGui::GetDrawData();
     if (dd && dd->Valid) ImGui_ImplAndroidGLES2_RenderDrawData(dd);
-
-    if (g_frame % 300 == 1)
-        logff("[GUI] render frame=%d", g_frame);
 }
 
-// NVEventEGLSwapBuffers memanggil eglSwapBuffers di dalamnya
-// Kita render SETELAH orig — tapi SEBELUM eglSwapBuffers asli dipanggil
-// caranya: hook NVEventEGLSwapBuffers, panggil orig dulu,
-// lalu render di sini tidak bisa karena swap sudah terjadi di dalam orig.
-//
-// Solusi: hook eglSwapBuffers dari dalam NVEventEGLSwapBuffers
-// dan render di hook_eglSwapBuffers tepat sebelum swap.
+// Hook Render2dStuff — titik yang sama dengan AML_ImGui
+// _Z13Render2dStuffv offset 0x3f641c
+typedef void (*Render2dStuff_t)(void);
+static Render2dStuff_t orig_Render2dStuff = nullptr;
 
-typedef EGLBoolean (*eglSwapBuffers_t)(EGLDisplay, EGLSurface);
-static eglSwapBuffers_t orig_eglSwapBuffers = nullptr;
-
-static EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
+static void hook_Render2dStuff(void) {
+    orig_Render2dStuff();
     do_render();
-    return orig_eglSwapBuffers(dpy, surface);
-}
-
-typedef void (*NVEventEGLSwapBuffers_t)(void);
-static NVEventEGLSwapBuffers_t orig_NVEventEGLSwapBuffers = nullptr;
-static int (*g_dobbyHook)(void*, void*, void**) = nullptr;
-
-static void hook_NVEventEGLSwapBuffers(void) {
-    // Pasang hook eglSwapBuffers setiap frame — jaga agar tidak hilang
-    void* hEGL = dlopen("libEGL.so", RTLD_NOW | RTLD_GLOBAL);
-    if (hEGL && g_dobbyHook) {
-        void* addr = dlsym(hEGL, "eglSwapBuffers");
-        if (addr) {
-            void* cur_orig = nullptr;
-            // Selalu re-hook
-            g_dobbyHook(addr, (void*)hook_eglSwapBuffers, (void**)&cur_orig);
-            if (!orig_eglSwapBuffers && cur_orig)
-                orig_eglSwapBuffers = (eglSwapBuffers_t)cur_orig;
-        }
-    }
-    orig_NVEventEGLSwapBuffers();
 }
 
 extern "C" {
 
 EXPORT void* __GetModInfo() {
-    static const char* info = "amlgui|1.9|ImGui overlay|brruham";
+    static const char* info = "amlgui|2.0|ImGui overlay|brruham";
     return (void*)info;
 }
 
 EXPORT void OnModPreLoad() {
     remove(LOGFILE);
-    logf("[GUI] OnModPreLoad v1.9");
+    logf("[GUI] OnModPreLoad v2.0");
 }
 
 EXPORT void OnModLoad() {
@@ -178,22 +149,24 @@ EXPORT void OnModLoad() {
 
     void* hDobby = dlopen("libdobby.so", RTLD_NOW | RTLD_GLOBAL);
     if (!hDobby) { logf("[GUI] ERROR: libdobby"); return; }
-    g_dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
-    if (!g_dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
+    auto dobbyHook = (int(*)(void*,void*,void**)) dlsym(hDobby, "DobbyHook");
+    if (!dobbyHook) { logf("[GUI] ERROR: DobbyHook sym"); return; }
 
     uintptr_t base = get_lib_base("libGTASA.so");
     if (!base) { logf("[GUI] ERROR: libGTASA base"); return; }
     logff("[GUI] libGTASA base = 0x%08x", (unsigned)base);
 
-    void* target = (void*)(base + 0x268f4c + 1);
-    logff("[GUI] target NVEventEGLSwapBuffers = %p", target);
+    // _Z13Render2dStuffv offset 0x3f641c (Thumb +1)
+    void* target = (void*)(base + 0x3f641c + 1);
+    logff("[GUI] target Render2dStuff = %p", target);
 
-    if (g_dobbyHook(target, (void*)hook_NVEventEGLSwapBuffers,
-                    (void**)&orig_NVEventEGLSwapBuffers) != 0) {
+    if (dobbyHook(target, (void*)hook_Render2dStuff,
+                  (void**)&orig_Render2dStuff) != 0) {
         logf("[GUI] ERROR: DobbyHook gagal");
         return;
     }
-    logf("[GUI] hook OK");
+
+    logf("[GUI] hook Render2dStuff OK");
     logf("[GUI] OnModLoad SELESAI");
 }
 
